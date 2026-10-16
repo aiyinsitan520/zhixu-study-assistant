@@ -1,0 +1,7 @@
+# The CI matrix runs on macOS and Windows, so shell and Python entry points must
+# keep LF endings or they fail to execute after a Windows checkout.
+*.sh text eol=lf
+*.command text eol=lf
+*.py text eol=lf
+*.mjs text eol=lf
+*.bat text eol=crlf

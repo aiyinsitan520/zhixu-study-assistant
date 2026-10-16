@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env*
+!.env.example
+data/
+*.sqlite*
+*.zip
+.DS_Store
+test-results/
+.local/
+secrets.json
+backups/
+
+.playwright-cli/
+output/

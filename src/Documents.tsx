@@ -1,0 +1,10 @@
+import { useState } from 'react';
+import { ArrowLeft,ChevronLeft,ChevronRight,Download,ZoomIn,RotateCw } from 'lucide-react';
+import type { Document } from '../shared/schema';
+import { Button } from './ui';
+export function DocumentReader({document,onBack}:{document:Document;onBack:()=>void}){
+  const [page,setPage]=useState(0),[zoom,setZoom]=useState(false),[rotation,setRotation]=useState(0);
+  const p=document.pages[page];
+  return <><div className="practice-top"><Button variant="ghost" onClick={onBack}><ArrowLeft size={16}/>返回题库</Button><span className="tag">原文资料 · {document.pages.length} 页 / 图</span></div><div className="page-heading"><div><span className="eyebrow">KEEP THE ORIGINAL, KEEP THE DETAILS</span><h1>{document.name}</h1><p>原始公式、图形与解题过程，完整保留。</p></div>{document.attachmentId&&<a className="button button-outline" href={'/api/attachments/'+document.attachmentId} target="_blank" rel="noreferrer"><Download size={16}/>原始 PDF</a>}</div>
+    <div className="reader-layout"><aside className="panel reader-index">{document.pages.map((p,i)=><button key={i} className={page===i?'active':''} onClick={()=>{setPage(i);setRotation(0);}}><span>{String(i+1).padStart(2,'0')}</span>{p.label}<small>{p.kind==='reference'?'解答 / 参考':p.kind==='front'?'卷首':'练习'}</small></button>)}</aside><section className="panel reader-paper"><div className="reader-toolbar"><Button variant="ghost" aria-label="上一页" disabled={!page} onClick={()=>{setPage(page-1);setRotation(0);}}><ChevronLeft size={16}/></Button><span>{p.label} · {page+1} / {document.pages.length}</span><Button variant="ghost" aria-label="下一页" disabled={page===document.pages.length-1} onClick={()=>{setPage(page+1);setRotation(0);}}><ChevronRight size={16}/></Button><Button variant="ghost" aria-label="放大原页" onClick={()=>setZoom(!zoom)}><ZoomIn size={16}/></Button><Button variant="ghost" aria-label="旋转原页" onClick={()=>setRotation(rotation+90)}><RotateCw size={16}/></Button></div><div className={'reader-image '+(zoom?'zoomed':'')}><img key={p.imageId} src={'/api/attachments/'+p.imageId} alt={p.label} style={{transform:`rotate(${rotation}deg)`}}/></div></section></div></>;
+}

@@ -8,3 +8,5 @@ export const betaModels=[
 ];
 export const visionChoices=betaModels.filter(m=>m.id==='cn:glm-5v-turbo');
 export type AIUsage={day:string;used:number;limit:number;remaining:number;model:string;visionModel:string;guest:boolean};
+
+export const modelStatus:Record<string,string>={'cn:glm-5.3-flash':'已实测可用','cn:kimi-k2.8-preview':'已实测可用','cn:kimi-k2.7':'已实测可用','cn:kimi-k3-1':'最近返回503','cn:kimi-k2.6':'最近返回503','cn:glm-5v-turbo':'最近返回503'};

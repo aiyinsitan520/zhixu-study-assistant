@@ -15,8 +15,7 @@ test('partial question changes preserve shared source material and student progr
   const password='patch-test-password-123';
   const setup=await send('/auth/setup','POST',{username:'owner',password,name:'Owner'});
   const admin=String(setup.headers['set-cookie']).split(';')[0];
-  const invite=(await send('/auth/invites','POST',{uses:2},admin)).json().code;
-  const alice=await send('/auth/register','POST',{username:'alice',password,name:'Alice',invite});
+  const alice=await send('/auth/register','POST',{username:'alice',password,name:'Alice'});
   const student=String(alice.headers['set-cookie']).split(';')[0];
   const folder=(await send('/folders','POST',{name:'原始资料'},admin)).json();
   const image=c.store.attach(Buffer.from('test image'),'source.png','image/png');
@@ -36,7 +35,7 @@ test('partial question changes preserve shared source material and student progr
   assert.equal(cleared.statusCode,200,cleared.body);assert.equal(cleared.json().folderId,null);assert.deepEqual(cleared.json().sources,[]);assert.equal(cleared.json().answer,'');assert.equal(cleared.json().subject,'线性代数');
 });
 
-test('public setup blocked, invitation registration, role restrictions, personal records and backup isolation',async t=>{
+test('public setup blocked, open registration, role restrictions, personal records and backup isolation',async t=>{
   const root=mkdtempSync(join(tmpdir(),'zhixu-auth-')),c=buildApp(new Store(root),{publicOrigin:'https://study.example:8443'});
   await c.app.ready();t.after(async()=>{await c.app.close();rmSync(root,{recursive:true,force:true});});
   const send=(url:string,method:any='GET',payload?:any,cookie?:string,host='127.0.0.1:4317',origin?:string)=>c.app.inject({url:'/api'+url,method,payload,headers:{host,...(cookie?{cookie}:{}),...(origin?{origin}:{})}});
@@ -50,11 +49,10 @@ test('public setup blocked, invitation registration, role restrictions, personal
   const admin=String(owner.headers['set-cookie']).split(';')[0];
   assert.match(String(owner.headers['set-cookie']),/HttpOnly/);
   assert.equal((await send('/auth/setup','POST',login)).statusCode,409);
-  const invitation=(await send('/auth/invites','POST',{uses:2},admin)).json().code;
-  const reg=async(username:string)=>{const r=await send('/auth/register','POST',{username,password:login.password,name:username,invite:invitation},undefined,'study.example:8443');assert.equal(r.statusCode,200,r.body);assert.match(String(r.headers['set-cookie']),/Secure/);return String(r.headers['set-cookie']).split(';')[0];};
+  const reg=async(username:string)=>{const r=await send('/auth/register','POST',{username,password:login.password,name:username},undefined,'study.example:8443');assert.equal(r.statusCode,200,r.body);assert.match(String(r.headers['set-cookie']),/Secure/);return String(r.headers['set-cookie']).split(';')[0];};
   const a=await reg('alice'),b=await reg('bob');
-  assert.equal((await send('/auth/register','POST',{...login,username:'extra',invite:invitation})).statusCode,400);
-  for(const [url,method,body] of [['/settings','GET',undefined],['/backup','GET',undefined],['/questions','POST',{title:'x',stem:'x'}],['/auth/invites','POST',{}]] as const)assert.equal((await send(url,method,body,a)).statusCode,403,url);
+  assert.equal((await send('/auth/register','POST',{...login,username:'extra'})).statusCode,200);
+  for(const [url,method,body] of [['/settings','GET',undefined],['/backup','GET',undefined]] as const)assert.equal((await send(url,method,body,a)).statusCode,403,url);
   const q=(await send('/questions','POST',{title:'求导',stem:'求 $x^2$ 的导数。'},admin)).json();
   assert.equal((await send('/questions/'+q.id,'PATCH',{stem:'changed'},a)).statusCode,403);
   await send('/questions/'+q.id,'PATCH',{wrong:true},a);

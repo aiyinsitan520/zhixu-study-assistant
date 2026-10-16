@@ -25,6 +25,7 @@ export const schemas:Record<string,z.ZodType>={
   profile:z.object({id:identifier,anonymous:z.boolean(),updatedAt:z.string().optional()}),
   jobs:z.object({id:identifier,name:z.string(),folderId:ref,attachmentIds:z.array(identifier),status:z.enum(['preparing','running','review','error','cancelled','committed']),tasks:z.array(z.object({id:identifier,source:sourceSchema,text:z.string().optional(),imageId:identifier.optional(),status:z.enum(['pending','done','error']),error:z.string().optional()})),drafts:z.array(questionInput.extend({id:identifier})),errors:z.array(z.string()),duplicates:z.array(z.string()),createdAt:z.string(),committedIds:z.array(identifier).optional()}),
 };
+for(const kind of ['folders','questions','jobs'])schemas[kind]=(schemas[kind] as z.ZodObject<any>).extend({ownerId:identifier.optional()});
 for(const kind of ['attempts','drafts','rewards','explanations','progress','wallet','profile'])schemas[kind]=(schemas[kind] as z.ZodObject<any>).extend({updatedAt:z.string().optional()});
 export function makeBackup(store:Store){
   return store.context.exit(()=>makeBackupUnscoped(store));

@@ -13,3 +13,8 @@ backups/
 
 .playwright-cli/
 output/
+
+user-ai-keys.json
+cloudflare-token.txt
+fixed-tunnel.json
+__pycache__/

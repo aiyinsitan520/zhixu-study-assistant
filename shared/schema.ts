@@ -8,6 +8,7 @@ export const questionInput = z.object({
   type:z.enum(questionTypes).default('计算'), subject:z.string().max(80).default('高等数学'),
   options:z.array(z.string().max(10000)).max(20).default([]), answer:z.string().max(30000).default(''),
   explanation:z.string().max(100000).default(''), answerOrigin:z.enum(['原文','人工','AI','无']).default('无'),
+  explanationOrigin:z.enum(['原文','人工','AI']).optional(),
   answerConfirmed:z.boolean().default(false), subquestions:z.array(z.string().max(20000)).max(50).default([]),
   sources:z.array(sourceSchema).max(300).default([]), folderId:z.string().nullable().default(null),
   materialKind:z.enum(['question','page']).default('question'),
@@ -15,8 +16,8 @@ export const questionInput = z.object({
   knowledgeSource:z.enum(['auto','manual','AI']).optional(),
 });
 export type QuestionInput = z.infer<typeof questionInput>;
-export type Question = QuestionInput & {id:string; createdAt:string; updatedAt:string; deleted:boolean; wrong:boolean; mastered:boolean};
-export type Folder = {id:string; name:string; parentId:string|null; deleted:boolean; deletedBatch?:string};
+export type Question = QuestionInput & {ownerId?:string;id:string; createdAt:string; updatedAt:string; deleted:boolean; wrong:boolean; mastered:boolean};
+export type Folder = {ownerId?:string;id:string; name:string; parentId:string|null; deleted:boolean; deletedBatch?:string};
 export type Document = {id:string;name:string;folderId:string;attachmentId?:string;pages:{imageId:string;label:string;kind:'exercise'|'reference'|'front'}[]};
 export type Attachment = {id:string; name:string; mime:string; hash:string; size:number; ownerId?:string};
 export const aiReviewSchema=z.object({id:z.string().uuid(),suggestedCorrect:z.boolean().nullable(),feedback:z.string().max(50000),createdAt:z.string(),model:z.string(),decision:z.enum(['pending','adopted','overridden']),confirmedAt:z.string().optional()});
@@ -26,7 +27,7 @@ export type Explanation = {id:string; questionId:string; content:string; created
 export type Reward = {id:string; points:number; createdAt:string};
 export type JobTask = {id:string; source:z.infer<typeof sourceSchema>; text?:string; imageId?:string; status:'pending'|'done'|'error'; error?:string};
 export type ImportDraft = QuestionInput & {id:string};
-export type ImportJob = {id:string; name:string; folderId:string|null; attachmentIds:string[]; status:'preparing'|'running'|'review'|'error'|'cancelled'|'committed'; tasks:JobTask[]; drafts:ImportDraft[]; errors:string[]; duplicates:string[]; createdAt:string; committedIds?:string[]};
+export type ImportJob = {ownerId?:string;id:string; name:string; folderId:string|null; attachmentIds:string[]; status:'preparing'|'running'|'review'|'error'|'cancelled'|'committed'; tasks:JobTask[]; drafts:ImportDraft[]; errors:string[]; duplicates:string[]; createdAt:string; committedIds?:string[]};
 export type Settings = {baseUrl:string; visionBaseUrl:string; model:string; visionModel:string; hasKey:boolean; hasVisionKey:boolean};
 export type Stats = {questions:number; attempts:number; correct:number; correctQuestions:number; wrong:number; points:number; level:number; eligible:Question[]; claimed:string[]; mastered:number; activeDays:number; recent:{date:string; count:number}[]};
 export type Bootstrap = {folders:Folder[]; questions:Question[]; jobs:ImportJob[]; attempts:Attempt[]; stats:Stats};

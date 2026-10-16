@@ -1,4 +1,7 @@
 import Fastify from 'fastify';
+import {AIAccess} from './ai-access.ts';
+import {SharedSolutions} from './shared-solutions.ts';
+import {personalAISettings} from './personal-ai.ts';
 import multipart from '@fastify/multipart';
 import { z } from 'zod';
 import { extname } from 'node:path';
@@ -14,7 +17,7 @@ import { questionInput,attemptInput,draftInput,gradingOutput } from '../shared/s
 import { BACKUP_UPLOAD_LIMIT } from '../shared/limits.ts';
 import type { Question,Folder,Attempt,Draft,Attachment,ImportJob,ImportDraft,Explanation,Reward,Stats } from '../shared/schema.ts';
 import { Importer,officePath,allowedExtensions,mimeFor } from './importer.ts';
-import { chat,parseAI } from './ai.ts';
+import { chat,parseAI,effectiveAIConfig } from './ai.ts';
 import { makeBackup,restoreBackup } from './backup.ts';
 import { Auth } from './auth.ts';
 
@@ -32,6 +35,8 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
   const publicOrigin=options.publicOrigin||process.env.STUDY_PUBLIC_ORIGIN;
   const publicHost=publicOrigin?new URL(publicOrigin).host:undefined;
   const importer=new Importer(store);
+  const aiAccess=store.aiAccess=new AIAccess(store);
+  const solutions=new SharedSolutions(store,auth);
   app.register(multipart,{limits:{fileSize:100*1024*1024,files:20,fields:20}});
   let activeWrites=0,restoring=false;
   app.addHook('onRoute',route=>{const handler=route.handler;route.handler=function(req,reply){return store.asUser(req.user,()=>handler.call(this,req,reply));};});
@@ -42,7 +47,7 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     route.handler=async function(req,reply){
       const restore=route.url==='/api/restore';
       if(restoring)throw fail('正在恢复备份，请稍后重试',409);
-      if(restore){if(activeWrites||importer.active.size)throw fail('请等待正在进行的保存、AI 请求或导入完成后再恢复',409);restoring=true;}
+      if(restore){if(activeWrites||importer.active.size||solutions.busy)throw fail('请等待正在进行的保存、AI 请求或导入完成后再恢复',409);restoring=true;}
       else activeWrites++;
       try{return await handler.call(this,req,reply);}
       finally{if(restore)restoring=false;else activeWrites--;}
@@ -61,10 +66,11 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     if(!auth)return;
     req.user=auth.user(req);
     const path=req.url.split('?')[0];
-    if(path.startsWith('/api/')&&!['/api/health','/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/register'].includes(path)&&!req.user)return reply.code(401).send({error:'请先登录'});
+    if(path.startsWith('/api/')&&!['/api/health','/api/auth/status','/api/auth/setup','/api/auth/login','/api/auth/register','/api/auth/guest'].includes(path)&&!req.user)return reply.code(401).send({error:'请先登录'});
+    if(req.user?.guest&&!['GET','HEAD'].includes(req.method)&&path!=='/api/auth/logout')return reply.code(403).send({error:'游客仅在当前设备体验，AI、上传与服务器保存需先注册账号'});
     if(req.user?.role==='student'){
-      const admin=/^\/api\/(settings|imports|backup|restore|demo|folders)(\/|$)/.test(path)&&!(req.method==='GET'&&path==='/api/folders');
-      if(admin||(path==='/api/questions'&&req.method==='POST'))return reply.code(403).send({error:'只有管理员可以管理共享题库和站点设置'});
+      const admin=/^\/api\/(settings|backup|restore|demo)(\/|$)/.test(path)&&!(req.method==='GET'&&path==='/api/folders');
+      if(admin)return reply.code(403).send({error:'只有管理员可以管理共享题库和站点设置'});
     }
   });
   app.setErrorHandler((e,req,reply)=>{const err=e as Error&{statusCode?:number};reply.code(err instanceof z.ZodError?400:err.statusCode||400).send({error:err instanceof z.ZodError?'输入内容不完整或格式不正确':err.message});});
@@ -80,6 +86,9 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     return {questions:qs.length,attempts:ats.length,correct:correct.length,correctQuestions:new Set(correct.map(a=>a.questionId)).size,wrong:qs.filter(q=>q.wrong&&!q.mastered).length,points,level:Math.floor(points/100)+1,eligible:qs.filter(q=>!claimed.includes(q.id)&&correct.some(a=>a.questionId===q.id)),claimed,mastered:qs.filter(q=>q.mastered).length,activeDays:days.size,recent:[...days.entries()].sort().slice(-14).map(([date,count])=>({date,count}))};
   };
   auth?.register(app);
+  aiAccess.register(app,auth);
+  personalAISettings(app,store);
+  solutions.register(app);
   personalRoutes(app,store);
   announcementRoutes(app,store);
   knowledgeRoutes(app,store);
@@ -87,11 +96,11 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
   leaderboardRoutes(app,store,auth);
   app.get('/api/documents',()=>store.all('documents'));
   app.get('/api/health',req=>({ok:true,...(!auth||req.user?.role==='admin'?{dataDir:store.root,office:!!officePath(),node:process.version}:{})}));
-  app.get('/api/bootstrap',req=>({folders:store.all('folders'),questions:store.all('questions'),jobs:req.user?.role==='student'?[]:store.all('jobs'),attempts:store.all<Attempt>('attempts').reverse(),stats:stats()}));
-  app.post('/api/folders',async(req)=>{const v=z.object({name:z.string().trim().min(1).max(80),parentId:z.string().nullable().default(null)}).parse(req.body);activeFolder(v.parentId);return store.put('folders',{...v,id:id(),deleted:false});});
+  app.get('/api/bootstrap',req=>({folders:store.all('folders'),questions:store.all('questions'),jobs:store.all('jobs'),attempts:store.all<Attempt>('attempts').reverse(),stats:stats()}));
+  app.post('/api/folders',async(req)=>{const v=z.object({name:z.string().trim().min(1).max(80),parentId:z.string().nullable().default(null)}).parse(req.body);activeFolder(v.parentId);if(req.user?.role==='student'&&v.parentId&&!get<Folder>('folders',v.parentId).ownerId)throw fail('个人文件夹不能建在共享文件夹内',403);return store.put('folders',{...v,id:id(),deleted:false,...(req.user?.role==='student'?{ownerId:req.user.id}:{})});});
   app.patch('/api/folders/:id',async(req:any)=>{
-    const f=get<Folder>('folders',req.params.id);const v=z.object({name:z.string().trim().min(1).max(80).optional(),parentId:z.string().nullable().optional(),deleted:z.boolean().optional()}).parse(req.body);
-    if(v.parentId!==undefined){activeFolder(v.parentId);let parent=v.parentId;while(parent){if(parent===f.id)throw fail('不能把文件夹移动到自身或其子文件夹');parent=get<Folder>('folders',parent).parentId;}}
+    const f=get<Folder>('folders',req.params.id);if(req.user?.role==='student'&&f.ownerId!==req.user.id)throw fail('只有管理员可管理共享文件夹',403);const v=z.object({name:z.string().trim().min(1).max(80).optional(),parentId:z.string().nullable().optional(),deleted:z.boolean().optional()}).parse(req.body);
+    if(v.parentId!==undefined){activeFolder(v.parentId);if(req.user?.role==='student'&&v.parentId&&!get<Folder>('folders',v.parentId).ownerId)throw fail('请选择个人文件夹',403);let parent=v.parentId;while(parent){if(parent===f.id)throw fail('不能把文件夹移动到自身或其子文件夹');parent=get<Folder>('folders',parent).parentId;}}
     return store.transaction(()=>{
       if(v.deleted===true){const tree=new Set([f.id]);let changed=true;const fs=store.all<Folder>('folders');while(changed){changed=false;for(const item of fs)if(item.parentId&&tree.has(item.parentId)&&!tree.has(item.id)){tree.add(item.id);changed=true;}}
         const batch=id();for(const item of fs)if(tree.has(item.id)&&!item.deleted)store.put('folders',{...item,deleted:true,deletedBatch:batch});
@@ -104,15 +113,15 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
       return store.put('folders',{...f,...v,deletedBatch:v.deleted===false?undefined:f.deletedBatch});
     });
   });
-  app.post('/api/questions',async(req)=>{const v=questionInput.parse(req.body);activeFolder(v.folderId);validateSources(v);return store.put('questions',newQuestion(v));});
+  app.post('/api/questions',async(req)=>{const v=questionInput.parse(req.body);activeFolder(v.folderId);validateSources(v);if(req.user?.role==='student'&&v.folderId&&!get<Folder>('folders',v.folderId).ownerId)throw fail('请选择个人文件夹',403);const q=store.put('questions',{...newQuestion(v),...(req.user?.role==='student'?{ownerId:req.user.id}:{})});return q;});
   app.patch('/api/questions/:id',async(req:any)=>{
-    if(req.user?.role==='student'&&Object.keys(req.body||{}).some(k=>!['wrong','mastered'].includes(k)))throw fail('只有管理员可以修改共享题目',403);
+    if(req.user?.role==='student'&&get<Question>('questions',req.params.id).ownerId!==req.user.id&&Object.keys(req.body||{}).some(k=>!['wrong','mastered'].includes(k)))throw fail('只有管理员可以修改共享题目',403);
     const q=get<Question>('questions',req.params.id);
     const parsed=questionInput.partial().extend({deleted:z.boolean().optional(),wrong:z.boolean().optional(),mastered:z.boolean().optional()}).parse(req.body);
     // Optional fields with defaults are populated by Zod; PATCH may change only supplied keys.
     const v=Object.fromEntries(Object.entries(parsed).filter(([key])=>Object.hasOwn(req.body,key))) as typeof parsed;
-    if(v.folderId!==undefined)activeFolder(v.folderId);
-    const result=withKnowledge({...q,...v,updatedAt:now()});if(v.deleted===false&&result.folderId&&get<Folder>('folders',result.folderId).deleted)result.folderId=null;validateSources(result);
+    if(v.folderId!==undefined){activeFolder(v.folderId);if(req.user?.role==='student'&&v.folderId&&!get<Folder>('folders',v.folderId).ownerId)throw fail('请选择个人文件夹',403);}
+    const result=withKnowledge({...q,...v,...(v.explanation!==undefined&&v.explanation!==q.explanation?{explanationOrigin:'人工' as const}:{}),updatedAt:now()});if(v.deleted===false&&result.folderId&&get<Folder>('folders',result.folderId).deleted)result.folderId=null;validateSources(result);
     return store.put('questions',result);
   });
   app.get('/api/questions/:id',async(req:any)=>({question:get<Question>('questions',req.params.id),draft:store.get<Draft>('drafts',req.params.id)||{answer:'',images:[]},attempts:store.all<Attempt>('attempts').filter(a=>a.questionId===req.params.id).reverse(),explanations:store.all<Explanation>('explanations').filter(a=>a.questionId===req.params.id).reverse(),claimed:!!store.get('rewards',req.params.id)}));
@@ -142,30 +151,30 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     const a=get<Attempt>('attempts',req.params.id),q=get<Question>('questions',a.questionId);
     const sourceImages=q.sources.map(s=>s.imageId).filter((x):x is string=>!!x);
     const raw=await chat(store,'你是数学理工辅导老师。分析学生作答，参考答案也可能有误。图片模糊或证据不足时 correct=null。输出 JSON：{"correct":true或false或null,"feedback":"包含判断依据、步骤检查、纠正建议的 Markdown"}。这是辅助评阅，最终由用户确认。',JSON.stringify({题干:q.stem,小题:q.subquestions,参考答案:q.answer,参考答案来源:q.answerOrigin,作答:a.answer,图片顺序:`前 ${sourceImages.length} 张为原题，其余为学生作答`}),[...sourceImages,...a.images]);
-    const result=parseAI(raw,gradingOutput),c=store.privateConfig();
+    const result=parseAI(raw,gradingOutput),c=effectiveAIConfig(store);
     const review={id:id(),suggestedCorrect:result.correct,feedback:result.feedback,createdAt:now(),model:sourceImages.length||a.images.length?c.visionModel:c.model,decision:'pending' as const};
     store.put('attempts',{...get<Attempt>('attempts',a.id),aiReview:review});return review;
   });
   app.post('/api/questions/:id/explanations',async(req:any)=>{
     const q=get<Question>('questions',req.params.id);const imgs=q.sources.map(s=>s.imageId).filter((x):x is string=>!!x);
     const content=await chat(store,'你是大学数学与理工课程辅导老师。用中文 Markdown 分为：知识点、解题步骤、结论、易错点。公式用 $ 或 $$。明确不确定之处；如果题目信息不全请请求补充，不要编造图形条件。',JSON.stringify({题干:q.stem,小题:q.subquestions,选项:q.options,参考答案:q.answer,来源:q.answerOrigin}),imgs);
-    const c=store.privateConfig();return store.put('explanations',{id:id(),questionId:q.id,content,createdAt:now(),model:imgs.length?c.visionModel:c.model});
+    const c=effectiveAIConfig(store);return store.put('explanations',{id:id(),questionId:q.id,content,createdAt:now(),model:imgs.length?c.visionModel:c.model});
   });
   app.post('/api/questions/:id/reward',async(req:any)=>store.transaction(()=>{const q=get<Question>('questions',req.params.id);if(q.deleted)throw fail('题目已在回收站');if(!store.all<Attempt>('attempts').some(a=>a.questionId===q.id&&a.correct===true))throw fail('需要先确认本题作答正确');const old=store.get<Reward>('rewards',q.id);if(old)return {...old,alreadyClaimed:true,coins:readWallet(store).coins,coinsEarned:0};const wallet=creditReward(store,q.id);return {...store.put('rewards',{id:q.id,points:10,createdAt:now()}),alreadyClaimed:false,coins:wallet.coins,coinsEarned:10};}));
   app.post('/api/attachments',async(req)=>{const file=await req.file();if(!file)throw fail('请选择文件');const ext=extname(file.filename).toLowerCase();if(!['.png','.jpg','.jpeg','.webp'].includes(ext))throw fail('作答照片支持 JPG、PNG、WebP');const b=await file.toBuffer();if(b.length>15*1024*1024)throw fail('单张图片最多 15 MB');let compressed:Buffer,resized=false;try{const image=await loadImage(b);if(image.width*image.height>60000000)throw new Error();const scale=Math.min(1,2400/Math.max(image.width,image.height)),canvas=createCanvas(Math.max(1,Math.round(image.width*scale)),Math.max(1,Math.round(image.height*scale))),ctx=canvas.getContext('2d');resized=scale<1;ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);compressed=canvas.toBuffer('image/jpeg',85);}catch{throw fail('图片无法读取或尺寸过大，请重新选择');}const keepOriginal=!resized&&compressed.length>=b.length&&ext!=='.webp';const bytes=keepOriginal?b:compressed,mime=keepOriginal?mimeFor(file.filename):'image/jpeg',name=keepOriginal?file.filename:file.filename.replace(/\.[^.]+$/,'.jpg');const hash=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'),existing=store.all<Attachment>('attachments').find(a=>a.ownerId===req.user?.id&&a.hash===hash);if(existing)return existing;return store.attach(bytes,name,mime);});
   app.get('/api/attachments/:id',async(req:any,reply)=>{const a=get<Attachment>('attachments',req.params.id);reply.type(a.mime).header('Content-Disposition',`${a.mime.startsWith('image/')||a.mime==='application/pdf'?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`);return reply.send(store.bytes(a.id));});
   app.post('/api/imports',async(req:any)=>{
-    const folderId=typeof req.query.folderId==='string'&&req.query.folderId?req.query.folderId:null;activeFolder(folderId);
+    const folderId=typeof req.query.folderId==='string'&&req.query.folderId?req.query.folderId:null;activeFolder(folderId);if(req.user?.role==='student'&&folderId&&!get<Folder>('folders',folderId).ownerId)throw fail('请保存到个人文件夹，或选择未分类',403);if(importer.active.size>=3)throw fail('导入任务较多，请稍后重试',429);if(req.user?.role==='student'&&store.all<ImportJob>('jobs').some(j=>importer.active.has(j.id)))throw fail('请先等待当前个人导入完成',429);
     const files:Attachment[]=[];const duplicates:string[]=[];const known=new Set(store.all<Attachment>('attachments').map(a=>a.hash));
-    for await(const part of req.parts()){if(part.type!=='file')continue;if(!allowedExtensions.includes(extname(part.filename).toLowerCase()))throw fail(`不支持 ${part.filename}，请使用 PDF、Word、TXT 或图片`);const b=await part.toBuffer();if(b.length>50*1024*1024)throw fail('单个导入文件最多 50 MB');const a=store.attach(b,part.filename,mimeFor(part.filename),true);if(known.has(a.hash))duplicates.push(a.name);known.add(a.hash);files.push(a);}
+    for await(const part of req.parts()){if(part.type!=='file')continue;if(!allowedExtensions.includes(extname(part.filename).toLowerCase()))throw fail(`不支持 ${part.filename}，请使用 PDF、Word、TXT 或图片`);const b=await part.toBuffer();if(b.length>50*1024*1024)throw fail('单个导入文件最多 50 MB');const a=store.attach(b,part.filename,mimeFor(part.filename),req.user?.role!=='student');if(known.has(a.hash))duplicates.push(a.name);known.add(a.hash);files.push(a);}
     if(!files.length)throw fail('请选择至少一个文件');
-    const j:ImportJob={id:id(),name:files.map(a=>a.name).join('、'),folderId,attachmentIds:files.map(a=>a.id),status:'preparing',tasks:[],drafts:[],errors:[],duplicates,createdAt:now()};store.put('jobs',j);void importer.run(j.id);return j;
+    const j:ImportJob={...(req.user?.role==='student'?{ownerId:req.user.id}:{}),id:id(),name:files.map(a=>a.name).join('、'),folderId,attachmentIds:files.map(a=>a.id),status:'preparing',tasks:[],drafts:[],errors:[],duplicates,createdAt:now()};store.put('jobs',j);void importer.run(j.id);return j;
   });
   app.get('/api/imports/:id',async(req:any)=>get<ImportJob>('jobs',req.params.id));
   app.post('/api/imports/:id/cancel',async(req:any)=>{get('jobs',req.params.id);importer.cancel(req.params.id);return {ok:true};});
   app.post('/api/imports/:id/retry',async(req:any)=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')throw fail('已入库任务不能重试');void importer.run(j.id);return {ok:true};});
   app.put('/api/imports/:id/drafts',async(req:any)=>{const j=get<ImportJob>('jobs',req.params.id);if(importer.active.has(j.id)||j.status==='committed')throw fail('请等识别完成或取消后再校对');const drafts=z.array(questionInput.extend({id:z.string().uuid()})).max(1000).parse(req.body);drafts.forEach(validateSources);if(new Set(drafts.map(d=>d.id)).size!==drafts.length)throw fail('草稿标识重复');return store.put('jobs',{...j,drafts});});
-  app.post('/api/imports/:id/commit',async(req:any)=>store.transaction(()=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')return {ids:j.committedIds};if(importer.active.has(j.id))throw fail('请先等待识别结束或取消');if(!j.drafts.length)throw fail('没有待入库题目');const ids:string[]=[];for(const d of j.drafts){const data=questionInput.parse(d);activeFolder(data.folderId);validateSources(data);store.put('questions',newQuestion(data,d.id));ids.push(d.id);}store.put('jobs',{...j,status:'committed',committedIds:ids});return {ids};}));
+  app.post('/api/imports/:id/commit',async(req:any)=>store.transaction(()=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')return {ids:j.committedIds};if(importer.active.has(j.id))throw fail('请先等待识别结束或取消');if(!j.drafts.length)throw fail('没有待入库题目');const ids:string[]=[];for(const d of j.drafts){const data=questionInput.parse(d);activeFolder(data.folderId);validateSources(data);if(req.user?.role==='student'&&data.folderId&&!get<Folder>('folders',data.folderId).ownerId)throw fail('请选择个人文件夹',403);store.put('questions',{...newQuestion(data,d.id),...(j.ownerId?{ownerId:j.ownerId}:{})});ids.push(d.id);}store.put('jobs',{...j,status:'committed',committedIds:ids});if(req.user?.role==='admin')solutions.enqueue(ids,req.user);return {ids};}));
   app.get('/api/settings',()=>store.publicConfig());
   app.put('/api/settings',async(req)=>{
     const endpoint=z.string().refine(v=>{try{return ['http:','https:'].includes(new URL(v).protocol)&&!new URL(v).username&&!new URL(v).password;}catch{return false;}},'接口地址无效');
@@ -173,7 +182,7 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     const {clearKeys,...values}=c;if(!values.key)delete values.key;if(!values.visionKey)delete values.visionKey;if(clearKeys){values.key='';values.visionKey='';}return store.saveConfig(values);
   });
   app.post('/api/settings/test',async(req)=>{const {vision}=z.object({vision:z.boolean().default(false)}).parse(req.body||{});let imgs:string[]=[];if(vision){const canvas=createCanvas(64,64);const ctx=canvas.getContext('2d');ctx.fillStyle='red';ctx.fillRect(0,0,64,64);imgs=[store.attach(canvas.toBuffer('image/png'),'模型能力测试.png','image/png').id];}try{const answer=await chat(store,'按要求简短回答。',vision?'图片里的色块是什么颜色？仅回答中文颜色。':'请只回复“连接成功”。',imgs,undefined,vision);if(vision&&!answer.includes('红'))throw fail('连接成功，但图片识别测试未通过，请确认模型支持图片');return {ok:true,message:vision?'图片识别测试通过':'文字连接测试通过'};}finally{for(const aid of imgs){store.remove('attachments',aid);const {unlinkSync}=await import('node:fs');unlinkSync(store.file(aid));}}});
-  app.get('/api/backup',async(_,reply)=>{if(importer.active.size||activeWrites||restoring)throw fail('请等待保存、AI 请求或导入完成后再备份',409);reply.header('Content-Disposition','attachment; filename="study-backup.zip"').type('application/zip');return reply.send(Buffer.from(makeBackup(store)));});
+  app.get('/api/backup',async(_,reply)=>{if(importer.active.size||activeWrites||restoring||solutions.busy)throw fail('请等待保存、AI 请求或导入完成后再备份',409);reply.header('Content-Disposition','attachment; filename="study-backup.zip"').type('application/zip');return reply.send(Buffer.from(makeBackup(store)));});
   app.post('/api/restore',async(req)=>{const f=await req.file({limits:{fileSize:BACKUP_UPLOAD_LIMIT,files:1}});if(!f)throw fail('请选择备份 ZIP');return restoreBackup(store,await f.toBuffer());});
   app.post('/api/demo',()=>{
     if(store.all<Folder>('folders').some(f=>f.id==='demo-math'))return {ok:true};
@@ -189,6 +198,6 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
       for(const s of samples)store.put('questions',newQuestion(questionInput.parse({...s,folderId:'demo-math',answerOrigin:s.answer?'人工':'无',answerConfirmed:true})));
     });return {ok:true};
   });
-  app.addHook('onClose',async()=>{for(const c of importer.active.values())c.abort();while(importer.active.size)await new Promise(r=>setTimeout(r,10));auth?.close();store.close();});
+  app.addHook('onClose',async()=>{await solutions.close();for(const c of importer.active.values())c.abort();while(importer.active.size)await new Promise(r=>setTimeout(r,10));auth?.close();store.close();});
   return {app,store,importer,auth};
 }

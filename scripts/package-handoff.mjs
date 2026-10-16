@@ -8,7 +8,7 @@ const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const documentPath = join(root, '工作记录.md');
 const marker = '\n## 内置源码快照';
 const notes = readFileSync(documentPath, 'utf8').split(marker)[0].trimEnd() + '\n';
-const excluded = new Set(['node_modules', 'dist', '.git', '.local', '.playwright-cli', 'output', 'data', 'attachments', 'backups', 'secrets.json', 'test-results', '.DS_Store']);
+const excluded = new Set(['node_modules', 'dist', '.git', '.local', '.playwright-cli', 'output', 'data', 'attachments', 'backups', 'secrets.json', 'user-ai-keys.json', 'cloudflare-token.txt', 'fixed-tunnel.json', 'test-results', '__pycache__', '.DS_Store']);
 const files = {};
 function collect(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {

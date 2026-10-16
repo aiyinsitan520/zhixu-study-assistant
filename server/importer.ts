@@ -48,7 +48,7 @@ async function pages(store:Store,attachment:Attachment,signal:AbortSignal):Promi
         const page=await document.getPage(n);const base=page.getViewport({scale:1});const viewport=page.getViewport({scale:Math.min(1.6,2200/Math.max(base.width,base.height))});
         const canvas=createCanvas(Math.ceil(viewport.width),Math.ceil(viewport.height));
         await page.render({canvas:canvas as any,canvasContext:canvas.getContext('2d') as any,viewport}).promise;
-        const image=store.attach(canvas.toBuffer('image/png'),`${attachment.name} · 第 ${n} 页.png`,'image/png',true);
+        const image=store.attach(canvas.toBuffer('image/png'),`${attachment.name} · 第 ${n} 页.png`,'image/png',store.context.getStore()?.role!=='student');
         const tc=await page.getTextContent();const text=tc.items.map(x=>'str' in x?x.str:'').join(' ');
         tasks.push({id:id(),source:{...source,page:n,imageId:image.id},imageId:image.id,text,status:'pending'});page.cleanup();
       }

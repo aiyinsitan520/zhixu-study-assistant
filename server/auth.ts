@@ -1,11 +1,11 @@
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes,randomUUID,scrypt,timingSafeEqual,createHash } from 'node:crypto';
+import { randomBytes,randomUUID,scrypt,timingSafeEqual,createHash,createHmac } from 'node:crypto';
 import { promisify } from 'node:util';
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { FastifyInstance,FastifyRequest,FastifyReply } from 'fastify';
 
-export type User={id:string;username:string;name:string;role:'admin'|'student'};
+export type User={id:string;username:string;name:string;role:'admin'|'student';guest?:boolean};
 declare module 'fastify' { interface FastifyRequest { user?:User } }
 const derive=promisify(scrypt),digest=(s:string)=>createHash('sha256').update(s).digest('hex');
 const fail=(s:string,code=400)=>Object.assign(new Error(s),{statusCode:code});
@@ -26,7 +26,8 @@ export class Auth {
   get initialized(){return !!this.db.prepare('SELECT id FROM users LIMIT 1').get();}
   public(row:any):User{return {id:row.id,username:row.username,name:row.name,role:row.role};}
   token(req:FastifyRequest){return req.headers.cookie?.split(';').map(s=>s.trim()).find(s=>s.startsWith('zhixu_session='))?.slice(14)||'';}
-  user(req:FastifyRequest){const row=this.db.prepare('SELECT users.* FROM sessions JOIN users ON users.id=sessions.userId WHERE token=? AND expires>? AND disabled=0').get(digest(this.token(req)),Date.now());return row?this.public(row):undefined;}
+  guestKey(){let row=this.db.prepare("SELECT value FROM auth_meta WHERE key='guest-key'").get() as any;if(!row){this.db.prepare("INSERT INTO auth_meta VALUES('guest-key',?)").run(randomBytes(32).toString('hex'));row=this.db.prepare("SELECT value FROM auth_meta WHERE key='guest-key'").get();}return row.value as string;}
+  user(req:FastifyRequest){const raw=this.token(req);if(raw.startsWith('g.')){const parts=raw.split('.'),body=parts.slice(0,3).join('.'),signature=createHmac('sha256',this.guestKey()).update(body).digest('hex');if(parts.length===4&&/^[a-f0-9-]{36}$/.test(parts[1])&&Number(parts[2])>Date.now()&&/^[a-f0-9]{64}$/.test(parts[3])&&timingSafeEqual(Buffer.from(parts[3]),Buffer.from(signature)))return {id:parts[1],username:'guest',name:'游客同学',role:'student' as const,guest:true};return;}const row=this.db.prepare('SELECT users.* FROM sessions JOIN users ON users.id=sessions.userId WHERE token=? AND expires>? AND disabled=0').get(digest(this.token(req)),Date.now());return row?this.public(row):undefined;}
   cookie(req:FastifyRequest,reply:FastifyReply,token:string,age=604800){const local=/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(req.headers.host||'');reply.header('Set-Cookie',`zhixu_session=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${local?'':'; Secure'}`);}
   session(req:FastifyRequest,reply:FastifyReply,user:User){const token=randomBytes(32).toString('hex');this.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(digest(token),user.id,Date.now()+604800000);this.cookie(req,reply,token);return {user};}
   limit(key:string,max=12){const now=Date.now();for(const [k,v] of this.failures)if(v.until<now)this.failures.delete(k);const entry=this.failures.get(key)||{count:0,until:now+900000};if(entry.count>=max)throw fail('尝试过于频繁，请 15 分钟后重试',429);entry.count++;this.failures.set(key,entry);}
@@ -56,22 +57,17 @@ export class Auth {
     });
     app.post('/api/auth/register',async(req,reply)=>{
       this.limit('register:'+req.ip,120);
-      const v=credentials.extend({name:z.string().trim().min(1).max(30),invite:z.string().min(16).max(100)}).parse(req.body);
-      const token=digest(v.invite),encoded=await hash(v.password);
-      this.db.exec('BEGIN IMMEDIATE');try{
-        const invite=this.db.prepare('SELECT * FROM invites WHERE token=? AND expires>? AND remaining>0').get(token,Date.now());if(!invite)throw fail('邀请码无效、已过期或已用完');
-        const user:User={id:randomUUID(),username:v.username.toLowerCase(),name:v.name,role:'student'};
-        try{this.db.prepare('INSERT INTO users(id,username,name,role,password) VALUES(?,?,?,?,?)').run(user.id,user.username,user.name,user.role,encoded);}catch{throw fail('这个账号名已被使用');}
-        this.db.prepare('UPDATE invites SET remaining=remaining-1 WHERE token=?').run(token);this.db.exec('COMMIT');return this.session(req,reply,user);
-      }catch(e){this.db.exec('ROLLBACK');throw e;}
+      if(!this.initialized)throw fail('请等待管理员完成初始化',403);
+      const v=credentials.extend({name:z.string().trim().min(1).max(30)}).parse(req.body);
+      return this.session(req,reply,await this.add(v.username,v.password,v.name,'student'));
     });
+    app.post('/api/auth/guest',async(req,reply)=>{if(!this.initialized)throw fail('请等待管理员完成初始化',403);this.limit('guest:'+req.ip,120);const existing=this.user(req);if(existing)return {user:existing};const user:User={id:randomUUID(),username:'guest',name:'游客同学',role:'student',guest:true},body='g.'+user.id+'.'+(Date.now()+86400000);this.cookie(req,reply,body+'.'+createHmac('sha256',this.guestKey()).update(body).digest('hex'),86400);return {user};});
     app.post('/api/auth/logout',async(req,reply)=>{this.db.prepare('DELETE FROM sessions WHERE token=?').run(digest(this.token(req)));this.cookie(req,reply,'',0);return {ok:true};});
     app.post('/api/auth/password',async req=>{
       if(!req.user)throw fail('请先登录',401);const v=z.object({current:z.string().max(128),password:z.string().min(10).max(128)}).parse(req.body);
       this.limit('password:'+req.user.id);const row=this.db.prepare('SELECT password FROM users WHERE id=?').get(req.user.id) as any;if(!await verify(v.current,row.password))throw fail('当前密码不正确');
       this.db.prepare('UPDATE users SET password=? WHERE id=?').run(await hash(v.password),req.user.id);this.db.prepare('DELETE FROM sessions WHERE userId=?').run(req.user.id);return {ok:true};
     });
-    app.post('/api/auth/invites',async req=>{if(req.user?.role!=='admin')throw fail('仅管理员可邀请同学',403);const v=z.object({uses:z.number().int().min(1).max(100).default(20)}).parse(req.body||{}),code=randomBytes(18).toString('base64url');this.db.prepare('INSERT INTO invites VALUES(?,?,?)').run(digest(code),Date.now()+7*86400000,v.uses);return {code,uses:v.uses,expiresInDays:7};});
     app.get('/api/auth/users',async req=>{if(req.user?.role!=='admin')throw fail('仅管理员可管理账号',403);return this.db.prepare('SELECT id,username,name,role,disabled FROM users ORDER BY rowid').all();});
     app.patch('/api/auth/users/:id',async(req:any)=>{if(req.user?.role!=='admin')throw fail('仅管理员可管理账号',403);if(req.params.id===req.user.id)throw fail('不能停用自己');const v=z.object({disabled:z.boolean()}).parse(req.body);this.db.prepare("UPDATE users SET disabled=? WHERE id=? AND role='student'").run(v.disabled?1:0,req.params.id);this.db.prepare('DELETE FROM sessions WHERE userId=?').run(req.params.id);return {ok:true};});
   }

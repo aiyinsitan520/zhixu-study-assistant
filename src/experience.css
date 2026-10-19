@@ -1,0 +1,75 @@
+/* Material inspired by nico-glass-kit: tint, a restrained blur, edge light,
+   then opaque content. Original CSS; no SVG refraction or third party runtime. */
+:root{--ease-out:cubic-bezier(.23,1,.32,1);--ease-in-out:cubic-bezier(.77,0,.175,1)}
+:root[data-skin=glass]{--bg:#f0f5fe;--surface:#fafcff;--sidebar:#e9effc;--text:#253450;--muted:#60708b;--line:#ccd8ed;--accent:#4664b1;--accent-hover:#354f96;--soft:#e5edfc;--input:#fff;--danger:#b55151;--shadow:0 12px 32px #344f8710}
+:root[data-skin=glass][data-theme=dark]{color-scheme:dark;--bg:#101829;--surface:#19253a;--sidebar:#131f34;--text:#e4ecfc;--muted:#a3b4d0;--line:#344562;--accent:#a6bdfd;--accent-hover:#c4d4ff;--soft:#243451;--input:#152138;--danger:#f0a0a6;--shadow:0 12px 32px #0003}
+:root[data-skin=glass] body{background:radial-gradient(ellipse at 8% 8%,#9ebffd25,transparent 45%),radial-gradient(ellipse at 92% 60%,#d8c5f730,transparent 45%),var(--bg)}
+:root[data-skin=glass] .sidebar{background:color-mix(in srgb,var(--sidebar) 92%,transparent);border-right:1px solid color-mix(in srgb,var(--surface) 70%,var(--line));box-shadow:8px 0 35px #233f7606}
+:root[data-skin=glass] .topbar{background:color-mix(in srgb,var(--bg) 88%,transparent);border-bottom:1px solid var(--line)}
+:root[data-skin=glass] :is(.panel,.stat-card,.collection-card){background:color-mix(in srgb,var(--surface) 93%,transparent);border:1px solid color-mix(in srgb,var(--line) 70%,var(--surface));box-shadow:inset 0 1px 0 color-mix(in srgb,var(--surface) 75%,transparent),var(--shadow);border-radius:18px}
+:root[data-skin=glass] .nav-item{border-radius:12px}
+:root[data-skin=glass] .button{border-radius:999px}
+:root[data-skin=glass] .button-primary{box-shadow:inset 0 1px 0 #ffffff40,0 4px 10px #263b6b15}
+:root[data-skin=glass][data-theme=dark] .button-primary{color:#142443}
+:root[data-skin=glass] .collection-cover{background:linear-gradient(135deg,var(--soft),color-mix(in srgb,var(--accent) 20%,var(--surface)))}
+:root[data-skin=glass] .wallet-panel{padding:22px}
+:root[data-skin=glass] :is(.modal,.solution-content,.answer-editor){color:var(--text)}
+@supports (backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px)){
+ :root[data-skin=glass] :is(.sidebar,.topbar){-webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px)}
+ :root[data-skin=glass] .dashboard-hero{background:color-mix(in srgb,var(--surface) 80%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+}
+@supports not (backdrop-filter:blur(1px)){
+ :root[data-skin=glass] :is(.sidebar,.topbar,.panel){background:var(--surface)}
+}
+.glass-promo{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:30px;margin-top:24px;overflow:hidden;position:relative;isolation:isolate;background:linear-gradient(125deg,var(--surface),var(--soft))}
+.glass-promo>div:first-child{position:relative;z-index:1;max-width:580px}
+.glass-promo h2{font-size:25px;letter-spacing:-.6px;font-weight:550;margin:14px 0}
+.glass-promo p{font-size:13px;line-height:1.9;color:var(--muted)}
+.glass-promo small{font-size:11px;color:var(--muted)}
+.glass-promo-art{width:180px;min-width:160px;height:175px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;transform:rotate(7deg);background:linear-gradient(140deg,#ecf4ffb0,#c9d9fc55);border:1px solid #ffffffc0;border-radius:28px;box-shadow:inset 0 1px 0 #fff,12px 18px 35px #365b9c20;color:#4664a0}
+.glass-promo-art>span{font-family:Georgia,serif;font-size:74px;line-height:.9}
+.glass-promo-art i{font-size:10px;font-style:normal}.glass-promo-art b{font-size:8px;letter-spacing:3px}
+[data-theme=dark] .glass-promo-art{background:linear-gradient(140deg,#6e8ac144,#5472a415);border-color:#b9d2ff55;color:#c5d6ff;box-shadow:inset 0 1px 0 #bbd1fb44,12px 18px 35px #0002}
+.skin-promotion{position:relative;border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.skin-promotion .skin-preview{background:linear-gradient(125deg,#dce8fc,#e9e1fb)!important}
+.glass-free{font-size:10px;color:var(--accent);background:var(--soft);margin:0 0 16px;white-space:normal}
+.skin-card-foot{gap:10px;flex-wrap:wrap}.skin-card h3{font-size:16px}
+.collection-generate{position:relative;z-index:2;margin-top:16px;width:100%}
+.collection-solution-count{display:block;color:var(--accent);font-size:10px;margin-top:6px}
+.import-solution-items{max-height:350px;overflow:auto;margin-top:16px}.import-solution-items>div{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 0;border-top:1px solid var(--line);font-size:12px}.import-solution-items small{display:flex;align-items:center;gap:6px;color:var(--accent);white-space:nowrap}
+.motion-preference{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:5px 12px;color:var(--muted);font-size:11px;border-radius:8px;text-align:left}
+.motion-preference[aria-pressed=true]{color:var(--accent)}
+.solution-admin{padding:24px;margin-bottom:24px}.solution-admin>.section-label{margin-bottom:12px}.solution-admin>.row{margin:15px 0}.solution-admin small{font-size:11px}
+.solution-progress{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 0 10px}.solution-progress strong{font-size:25px;font-weight:550}.solution-progress small{font-size:12px;font-weight:400;color:var(--muted)}.solution-progress>span{font-size:12px;color:var(--accent)}
+.solution-admin progress{display:block;width:100%;height:7px;accent-color:var(--accent)}
+.solution-speed{display:flex;align-items:center;gap:12px;font-size:12px;margin:14px 0;color:var(--muted)}.solution-speed select{width:auto;min-height:38px}
+.practice-jump{display:flex;width:fit-content;gap:5px;padding:5px;border:1px solid var(--line);border-radius:999px;background:var(--surface);margin:0 0 18px;z-index:6}
+.practice-jump button{padding:9px 20px;font-size:12px;border-radius:999px;color:var(--accent);min-height:40px}.practice-jump button:active{background:var(--soft)}
+#practice-question,#practice-answer,#practice-solution{scroll-margin-top:120px}
+.math-keypad{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px;margin-bottom:8px}.math-keypad button{font-family:Georgia,serif;font-size:20px;background:var(--soft);border:1px solid var(--line);border-radius:8px;min-height:42px;color:var(--text)}
+.math-keypad button:active{background:var(--accent);color:var(--bg)}
+.formula-shortcuts{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:15px}.formula-shortcuts>span{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--muted);margin-right:2px}.formula-shortcuts button{display:inline-flex;align-items:center;justify-content:center;gap:5px;min-height:38px;padding:5px 9px;font-family:Georgia,serif;font-size:17px;border:1px solid var(--line);border-radius:8px;background:var(--input);color:var(--accent)}.formula-shortcuts small{font-family:inherit;font-size:10px;color:var(--muted)}
+.math-answer .answer-editor{min-height:180px}.formula-preview{background:var(--soft);padding:16px;border-radius:10px;min-height:100px}.formula-preview .math-text{font-size:20px;margin:12px 0}.formula-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 12px}.formula-fields .field{min-width:0}
+.answer-tools{flex-wrap:wrap;gap:8px}.answer-tools .upload-button{min-height:44px;padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:var(--soft);font-size:12px}.answer-tools>span{font-size:11px;color:var(--muted)}
+.answer-tools .upload-button:focus-within{outline:2px solid var(--accent);outline-offset:2px}.answer-tools input[type=file]{display:block;position:absolute;width:1px;height:1px;opacity:0}
+.dashboard-hero,.glass-promo{position:relative;isolation:isolate;overflow:hidden}.dashboard-hero::before,.glass-promo::before{content:'';position:absolute;inset:-45%;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 65% 30%,color-mix(in srgb,var(--accent) 14%,transparent),transparent 40%);opacity:.8}
+@media(prefers-reduced-motion:no-preference){
+ :root:not([data-motion=off]) .button{transition:transform 120ms var(--ease-out),background-color 150ms ease,box-shadow 150ms ease}
+ :root:not([data-motion=off]):not([data-input=keyboard]) .button:active:not(:disabled){transform:scale(.98)}
+ :root:not([data-motion=off]):not([data-input=keyboard]) :is(.page-heading,.dashboard-hero){transition:opacity 150ms var(--ease-out),transform 150ms var(--ease-out)}
+ @starting-style{:root:not([data-motion=off]):not([data-input=keyboard]) :is(.page-heading,.dashboard-hero){opacity:0;transform:translateY(4px)}}
+ :root:not([data-motion=off]) :is(.dashboard-hero,.glass-promo)::before{animation:study-light 24s var(--ease-in-out) infinite alternate}
+ :root:not([data-motion=off]) .glass-promo-art{animation:glass-arrive 250ms var(--ease-out) both}
+}
+@keyframes study-light{from{transform:translate3d(-6%,0,0);opacity:.5}to{transform:translate3d(6%,3%,0);opacity:1}}
+@keyframes glass-arrive{from{opacity:0;transform:translateY(8px) rotate(4deg)}to{opacity:1;transform:translateY(0) rotate(7deg)}}
+@media(hover:hover) and (pointer:fine){.practice-jump button:hover,.formula-shortcuts button:hover{background:var(--soft)}:root:not([data-motion=off]) .skin-card{transition:transform 200ms var(--ease-out),box-shadow 200ms ease}:root:not([data-motion=off]) .skin-card:hover{transform:translateY(-3px)}}
+:root[data-motion=off] *,:root[data-motion=off] *::before,:root[data-motion=off] *::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.skin-card:hover{transform:none!important}}
+@media(max-width:700px){
+ .glass-promo{padding:23px;gap:16px;align-items:flex-start}.glass-promo h2{font-size:22px}.glass-promo-art{min-width:76px;width:76px;height:110px;border-radius:18px}.glass-promo-art>span{font-size:48px}.glass-promo-art i{display:none}.glass-promo-art b{font-size:6px;letter-spacing:1px}
+ .practice-jump{position:sticky;top:60px;width:100%;box-shadow:var(--shadow)}.practice-jump button{flex:1;padding:8px 10px;font-size:13px;min-height:44px}
+ .math-keypad button{min-height:44px}.math-answer .answer-editor{font-size:16px;line-height:1.8}.formula-shortcuts button{min-height:44px}.formula-fields input{font-size:16px}.formula-fields{grid-template-columns:1fr}
+ .solution-admin{padding:20px}.solution-admin>.row .button{min-height:44px}.solution-progress{align-items:flex-start;flex-direction:column}.motion-preference{min-height:28px}
+ :root[data-skin=glass] .sidebar{background:var(--sidebar);-webkit-backdrop-filter:none;backdrop-filter:none}
+}

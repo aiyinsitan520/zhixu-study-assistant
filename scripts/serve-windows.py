@@ -4,16 +4,17 @@ import os, subprocess, time, msvcrt, re, winreg, json
 from urllib.parse import urlsplit
 
 APP=Path(__file__).resolve().parents[1]
-DEPLOY=Path('E:/AAA数据库/知序服务器')
+DEPLOY=Path(os.environ.get('STUDY_DEPLOY_DIR', 'E:/AAA数据库/知序服务器'))
 DEPLOY.mkdir(parents=True,exist_ok=True)
-lock=(DEPLOY/'server.lock').open('a+')
+lock=(DEPLOY/'server.lock').open('a+b')
+lock.seek(0)
 try:msvcrt.locking(lock.fileno(),msvcrt.LK_NBLCK,1)
 except OSError:raise SystemExit(0)
 stop=DEPLOY/'stop.request'; stop.unlink(missing_ok=True)
 env=os.environ.copy()
 env.update(STUDY_DATA_DIR=str(DEPLOY/'data'),PORT='4317',NODE_ENV='production')
 (DEPLOY/'supervisor.pid').write_text(str(os.getpid()))
-node=Path('C:/Program Files/node.exe')
+node=Path(os.environ.get('STUDY_NODE_EXE', 'C:/Program Files/node.exe'))
 child=None; tunnel=None; current_origin=None
 fixed_file=DEPLOY/'fixed-tunnel.json'
 fixed_origin=''; token_file=None
@@ -27,18 +28,45 @@ if fixed_file.exists():
     if not token_file.is_file():raise ValueError('Tunnel token file missing')
     (DEPLOY/'public-origin.txt').write_text(fixed_origin)
 
-cloudflared=Path('C:/Users/28058/AppData/Local/AgentDock/bin/cloudflared.exe')
+cloudflared=Path(os.environ.get('STUDY_CLOUDFLARED_EXE', 'C:/Users/28058/AppData/Local/AgentDock/bin/cloudflared.exe'))
 try:
     with winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders') as key:
         desktop=Path(os.path.expandvars(winreg.QueryValueEx(key,'Desktop')[0]))
 except OSError:desktop=Path(os.environ['USERPROFILE'])/'Desktop'
+
+def terminate(process):
+    if process and process.poll() is None:
+        process.terminate()
+        try:process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill(); process.wait(timeout=5)
+
+def publish_request():
+    path=DEPLOY/'publish-request.json'
+    if not path.exists():return ''
+    try:
+        request=json.loads(path.read_text(encoding='utf-8'))
+        action=request.get('action')
+        if action not in ('restart-tunnel','restart-server') or not isinstance(request.get('id'),str) or not 0<=time.time()-request.get('createdAt',0)<240:return ''
+        (DEPLOY/'publish-result.json').write_text(json.dumps({'id':request['id'],'action':action,'acceptedAt':time.time()}),encoding='utf-8')
+        return action
+    except (OSError,ValueError,TypeError):return ''
+    finally:path.unlink(missing_ok=True)
+
 with (DEPLOY/'server.log').open('ab',buffering=0) as log:
     while not stop.exists():
         origin_file=DEPLOY/'public-origin.txt'
+        action=publish_request()
+        if action=='restart-server':
+            terminate(child); child=None
+        elif action=='restart-tunnel':
+            terminate(tunnel); tunnel=None
         origin=origin_file.read_text().strip() if origin_file.exists() else ''
-        if origin!=current_origin and child and child.poll() is None:
-            child.terminate(); child.wait(timeout=15); child=None
-        current_origin=origin;env['STUDY_PUBLIC_ORIGIN']=origin
+        # Retain the previous Host allowlist while a new tunnel is connecting.
+        if origin:
+            if origin!=current_origin and child and child.poll() is None:
+                terminate(child); child=None
+            current_origin=origin;env['STUDY_PUBLIC_ORIGIN']=origin
         if child is None or child.poll() is not None:
             child=subprocess.Popen([str(node),'--import','tsx','server/index.ts'],cwd=APP,env=env,stdin=subprocess.DEVNULL,stdout=log,stderr=log,creationflags=subprocess.CREATE_NO_WINDOW)
             (DEPLOY/'server.pid').write_text(str(child.pid))
@@ -60,10 +88,7 @@ with (DEPLOY/'server.log').open('ab',buffering=0) as log:
         elif tunnel and 'trycloudflare.com' in origin:
             origin_file.unlink(missing_ok=True)
         time.sleep(5)
-    if child and child.poll() is None:
-        child.terminate()
-        try:child.wait(timeout=15)
-        except subprocess.TimeoutExpired:child.kill()
-    if tunnel and tunnel.poll() is None:tunnel.terminate()
+    terminate(child)
+    terminate(tunnel)
 (DEPLOY/'supervisor.pid').unlink(missing_ok=True)
 (DEPLOY/'server.pid').unlink(missing_ok=True)

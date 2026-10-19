@@ -11,6 +11,6 @@ export async function serverApi<T=any>(url:string,method='GET',data?:unknown):Pr
   const form=data instanceof FormData;
   const r=await fetch('/api'+url,{method,headers:!form&&data!==undefined?{'Content-Type':'application/json'}:undefined,body:data===undefined?undefined:form?data:JSON.stringify(data)});
   let result:any;try{result=await r.json();}catch{throw new Error('服务响应异常，请确认本地服务仍在运行');}
-  if(r.status===401&&!url.startsWith('/auth/')){location.reload();throw new Error('登录已过期');}if(!r.ok)throw new Error(result.error||'操作失败');if(url.startsWith('/auth/')&&result.user){storageUser(result.user.id);if(result.user.guest)localStorage.setItem('zhixu-storage-'+result.user.id,'local');}return result;
+  if(r.status===401&&!url.startsWith('/auth/')){location.reload();throw new Error('登录已过期');}if(!r.ok)throw new Error(result.error||'操作失败');if(url.startsWith('/auth/')&&result.user){storageUser(result.user.id,!!result.user.guest);if(result.user.guest)localStorage.setItem('zhixu-storage-'+result.user.id,'local');}return result;
 }
 export const formatDate=(v:string)=>new Date(v).toLocaleString('zh-CN',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});

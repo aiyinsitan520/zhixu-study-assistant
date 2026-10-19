@@ -14,6 +14,7 @@ export function applySkin(id:string){document.documentElement.dataset.skin=id;lo
 export function storedSkin(){return localStorage.getItem('study-skin')||'forest';}
 
 export function Shop({notify}:{notify:(s:string)=>void}){
+  const user=useUser();
   const [data,setData]=useState<ShopData|null>(null),[busy,setBusy]=useState(''),[error,setError]=useState('');
   const load=async()=>{try{setData(await api<ShopData>('/shop'));}catch(e){setError((e as Error).message);}};
   useEffect(()=>{void load();},[]);
@@ -21,18 +22,18 @@ export function Shop({notify}:{notify:(s:string)=>void}){
   if(!data)return <div className="panel"><Empty icon={Palette} title="正在打开商店…" description={error||'读取你的金币与已解锁皮肤。'}/></div>;
   const {wallet}=data;
   return <>
-    <div className="page-heading"><div><span className="eyebrow">EARN, THEN MAKE IT YOURS</span><h1>用每一道题，换来自己的颜色</h1><p>答对一道题并领取奖励可获得 10 金币，金币累积后可解锁皮肤。</p></div><Palette className="page-illustration" size={42}/></div>
+    <div className="page-heading"><div><span className="eyebrow">EARN, THEN MAKE IT YOURS</span><h1>用每一道题，换来自己的颜色</h1><p>答对一道题并领取奖励可获得 10 金币，反馈被管理员采纳可获得 1000 金币，用来解锁喜欢的皮肤。</p></div><Palette className="page-illustration" size={42}/></div>
     {error&&<p className="notice error" role="alert">{error}</p>}
     <section className="panel wallet-panel"><div className="wallet-balance"><div className="wallet-coin"><Coins size={24}/></div><div><span className="eyebrow">我的金币</span><strong>{wallet.coins}</strong><p className="subtle">累计获得 {wallet.earned} 金币 · 已解锁 {wallet.owned.length} / {data.skins.length} 套皮肤</p></div></div><div className="row"><span className="tag green"><ShieldCheck size={13}/>每道题只发放一次</span></div></section>
-    <h3 className="section-title">皮肤商店</h3>
-    <div className="shop-grid">{data.skins.map(skin=>{const owned=wallet.owned.includes(skin.id),active=wallet.activeSkin===skin.id,short=wallet.coins<skin.cost;return <article className="panel skin-card" key={skin.id}>
+    <section className="glass-promo panel"><div><span className="eyebrow">BETA GIFT · YOURS TO KEEP</span><h2>把一束流光，放进学习空间。</h2><p>「流光玻璃」整个内测期间免费领取，注册账号领取后永久保留。浅色透亮，深色安静。</p><small>{user.guest?'游客可在当前设备体验；永久领取请使用注册账号。':'领取不扣金币，设备保存模式也会同步你的账号领取记录。'}</small></div><div className="glass-promo-art" aria-hidden="true"><span>∫</span><i>一步一步，折射进步</i><b>GLASS / 07</b></div></section><h3 className="section-title">皮肤商店</h3>
+    <div className="shop-grid">{data.skins.map(skin=>{const owned=wallet.owned.includes(skin.id),active=wallet.activeSkin===skin.id,short=wallet.coins<skin.cost;return <article className={"panel skin-card "+(skin.promotion?"skin-promotion":"")} key={skin.id}>
       <div className="skin-preview" style={{background:skin.swatch[2]}}><div className="skin-preview-bar" style={{background:skin.swatch[0]}}/><div className="skin-preview-row"><span className="skin-preview-dot" style={{background:skin.swatch[1]}}/><span className="skin-preview-line" style={{background:skin.swatch[0]}}/></div><div className="skin-preview-row"><span className="skin-preview-dot" style={{background:skin.swatch[0]}}/><span className="skin-preview-line" style={{background:skin.swatch[1]}}/></div><div className="skin-preview-row"><span className="skin-preview-line" style={{background:skin.swatch[1]}}/></div></div>
       <div className="row spread"><h3>{skin.name}</h3><span className="skin-swatch">{skin.swatch.map(c=><i key={c} style={{background:c}}/>)}</span></div>
-      <p>{skin.tagline}</p>
-      <div className="skin-card-foot">{active?<span className="skin-active"><Check size={14}/> 使用中</span>:skin.cost===0?<span className="skin-price free">默认皮肤</span>:<span className="skin-price">{owned?<><Check size={13}/> 已解锁</>:<><Coins size={13}/> {skin.cost} 金币</>}</span>}
-        {active?null:owned?<Button size="sm" variant="outline" busy={busy===skin.id} disabled={!!busy} onClick={()=>act(skin.id,()=>api(`/shop/active`,'POST',{id:skin.id}),()=>`已切换到「${skin.name}」`)}>使用这套皮肤</Button>:<Button size="sm" busy={busy===skin.id} disabled={!!busy||short} onClick={()=>act(skin.id,()=>api(`/shop/skins/${skin.id}`,'POST'),r=>r.purchased?`已解锁「${skin.name}」，并已切换`:`已切换到「${skin.name}」`)}>{short?<><Lock size={14}/> 还差 {skin.cost-wallet.coins}</>:<><Gift size={14}/> 解锁</>}</Button>}</div>
+      <p>{skin.tagline}</p>{skin.promotion&&<span className="tag glass-free">内测免费 · 领取后永久保留</span>}
+      <div className="skin-card-foot">{active?<span className="skin-active"><Check size={14}/> 使用中</span>:skin.cost===0?<span className="skin-price free">{skin.promotion?(owned?'已永久领取':'0 金币领取'):'默认皮肤'}</span>:<span className="skin-price">{owned?<><Check size={13}/> 已解锁</>:<><Coins size={13}/> {skin.cost} 金币</>}</span>}
+        {active?null:owned?<Button size="sm" variant="outline" busy={busy===skin.id} disabled={!!busy} onClick={()=>act(skin.id,()=>api(`/shop/active`,'POST',{id:skin.id}),()=>`已切换到「${skin.name}」`)}>使用这套皮肤</Button>:<Button size="sm" busy={busy===skin.id} disabled={!!busy||short} onClick={()=>act(skin.id,()=>api(`/shop/skins/${skin.id}`,'POST'),r=>r.purchased?`已解锁「${skin.name}」，并已切换`:`已切换到「${skin.name}」`)}>{short?<><Lock size={14}/> 还差 {skin.cost-wallet.coins}</>:<><Gift size={14}/> {skin.promotion?'免费领取':'解锁'}</>}</Button>}</div>
     </article>;})}</div>
-    <p className="knowledge-help">皮肤只改变界面的配色，不会影响题目、作答记录和已获得的积分。金币与皮肤保存在你自己的账号里，切换设备后仍然有效。</p>
+    <p className="knowledge-help">皮肤带来不同的配色与材质，不影响题目与学习记录。注册账号领取的内测赠礼永久保留；设备模式的金币和付费皮肤请随学习记录备份。侧栏可关闭动态效果，系统的减少动态效果设置也会生效。</p>
   </>;
 }
 

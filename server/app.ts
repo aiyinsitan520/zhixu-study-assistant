@@ -1,6 +1,10 @@
 import Fastify from 'fastify';
 import {AIAccess} from './ai-access.ts';
 import {SharedSolutions} from './shared-solutions.ts';
+import {AIResults} from './ai-results.ts';
+import {Snapshots} from './snapshots.ts';
+import {gzip} from 'node:zlib';
+import {promisify} from 'node:util';
 import {personalAISettings} from './personal-ai.ts';
 import multipart from '@fastify/multipart';
 import { z } from 'zod';
@@ -11,6 +15,7 @@ import {announcementRoutes} from './announcements.ts';
 import {knowledgeRoutes} from './knowledge.ts';
 import {shopRoutes,creditReward,readWallet} from './shop.ts';
 import {leaderboardRoutes} from './leaderboard.ts';
+import {feedbackRoutes} from './feedback.ts';
 import {withKnowledge} from '../shared/knowledge.ts';
 import { Store,id,now } from './store.ts';
 import { questionInput,attemptInput,draftInput,gradingOutput } from '../shared/schema.ts';
@@ -29,14 +34,31 @@ const judge=(q:Question,answer:string):boolean|null=>{
   if(q.type==='单选'||q.type==='多选')return normalize(q.answer)===normalize(answer);
   return null;
 };
-export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:string}={}){
+export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:string;snapshots?:boolean}={}){
   const app=Fastify({logger:false,bodyLimit:5*1024*1024});
   const auth=options.auth===false?undefined:new Auth(store.root);
   const publicOrigin=options.publicOrigin||process.env.STUDY_PUBLIC_ORIGIN;
   const publicHost=publicOrigin?new URL(publicOrigin).host:undefined;
   const importer=new Importer(store);
   const aiAccess=store.aiAccess=new AIAccess(store);
+  const aiResults=store.aiResults=new AIResults(store);
+  aiResults.migrate(auth);
+  aiResults.migrateReviews(auth);
+  const snapshots=(options.snapshots??process.env.NODE_ENV==='production')?new Snapshots(store,auth):undefined;
+  if(snapshots){store.onChange=()=>snapshots.schedule();snapshots.schedule();}
   const solutions=new SharedSolutions(store,auth);
+  if(snapshots)app.addHook('onResponse',async(req)=>{if(req.url.startsWith('/api/auth/')&&!['GET','HEAD'].includes(req.method))snapshots.schedule();});
+  const compress=promisify(gzip);
+  app.addHook('onSend',async(req,reply,payload)=>{
+    if(!String(reply.getHeader('content-type')||'').includes('application/json')||reply.getHeader('content-encoding'))return payload;
+    reply.header('Vary','Accept-Encoding');
+    const enc=String(req.headers['accept-encoding']||'').split(',').map(s=>s.trim().split(';'));
+    const allowed=enc.find(e=>e[0]==='gzip')||enc.find(e=>e[0]==='*');
+    if(!allowed||allowed.slice(1).some(s=>/^\s*q\s*=\s*0(?:\.0*)?\s*$/.test(s)))return payload;
+    if(typeof payload!=='string'&&!Buffer.isBuffer(payload))return payload;
+    if(Buffer.byteLength(payload)<1024)return payload;
+    const bytes=await compress(payload,{level:6});reply.header('Content-Encoding','gzip').removeHeader('Content-Length');return bytes;
+  });
   app.register(multipart,{limits:{fileSize:100*1024*1024,files:20,fields:20}});
   let activeWrites=0,restoring=false;
   app.addHook('onRoute',route=>{const handler=route.handler;route.handler=function(req,reply){return store.asUser(req.user,()=>handler.call(this,req,reply));};});
@@ -89,14 +111,18 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
   aiAccess.register(app,auth);
   personalAISettings(app,store);
   solutions.register(app);
+  snapshots?.register(app);
   personalRoutes(app,store);
   announcementRoutes(app,store);
   knowledgeRoutes(app,store);
   shopRoutes(app,store);
   leaderboardRoutes(app,store,auth);
+  feedbackRoutes(app,store,auth);
   app.get('/api/documents',()=>store.all('documents'));
   app.get('/api/health',req=>({ok:true,...(!auth||req.user?.role==='admin'?{dataDir:store.root,office:!!officePath(),node:process.version}:{})}));
-  app.get('/api/bootstrap',req=>({folders:store.all('folders'),questions:store.all('questions'),jobs:store.all('jobs'),attempts:store.all<Attempt>('attempts').reverse(),stats:stats()}));
+  // Lists need question metadata; load the saved solution only for the opened
+  // question so a large solved bank does not slow every login and refresh.
+  app.get('/api/bootstrap',req=>({folders:store.all('folders'),questions:store.all<Question>('questions').map(q=>({...q,explanation:'',hasExplanation:!!q.explanation})),jobs:store.all('jobs'),attempts:store.all<Attempt>('attempts').reverse(),stats:stats()}));
   app.post('/api/folders',async(req)=>{const v=z.object({name:z.string().trim().min(1).max(80),parentId:z.string().nullable().default(null)}).parse(req.body);activeFolder(v.parentId);if(req.user?.role==='student'&&v.parentId&&!get<Folder>('folders',v.parentId).ownerId)throw fail('个人文件夹不能建在共享文件夹内',403);return store.put('folders',{...v,id:id(),deleted:false,...(req.user?.role==='student'?{ownerId:req.user.id}:{})});});
   app.patch('/api/folders/:id',async(req:any)=>{
     const f=get<Folder>('folders',req.params.id);if(req.user?.role==='student'&&f.ownerId!==req.user.id)throw fail('只有管理员可管理共享文件夹',403);const v=z.object({name:z.string().trim().min(1).max(80).optional(),parentId:z.string().nullable().optional(),deleted:z.boolean().optional()}).parse(req.body);
@@ -121,10 +147,11 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     // Optional fields with defaults are populated by Zod; PATCH may change only supplied keys.
     const v=Object.fromEntries(Object.entries(parsed).filter(([key])=>Object.hasOwn(req.body,key))) as typeof parsed;
     if(v.folderId!==undefined){activeFolder(v.folderId);if(req.user?.role==='student'&&v.folderId&&!get<Folder>('folders',v.folderId).ownerId)throw fail('请选择个人文件夹',403);}
-    const result=withKnowledge({...q,...v,...(v.explanation!==undefined&&v.explanation!==q.explanation?{explanationOrigin:'人工' as const}:{}),updatedAt:now()});if(v.deleted===false&&result.folderId&&get<Folder>('folders',result.folderId).deleted)result.folderId=null;validateSources(result);
+    const contentChanged=['title','stem','type','options','subquestions','sources','answer'].some(key=>Object.hasOwn(v,key)&&JSON.stringify((v as any)[key])!==JSON.stringify((q as any)[key]));
+    const result=withKnowledge({...q,...v,...(v.explanation!==undefined&&v.explanation!==q.explanation?{explanationOrigin:'人工' as const}:{}),...(contentChanged&&!Object.hasOwn(v,'solutionVersion')?{solutionVersion:undefined,solutionCompletedAt:undefined}:{}),updatedAt:now()});if(v.deleted===false&&result.folderId&&get<Folder>('folders',result.folderId).deleted)result.folderId=null;validateSources(result);
     return store.put('questions',result);
   });
-  app.get('/api/questions/:id',async(req:any)=>({question:get<Question>('questions',req.params.id),draft:store.get<Draft>('drafts',req.params.id)||{answer:'',images:[]},attempts:store.all<Attempt>('attempts').filter(a=>a.questionId===req.params.id).reverse(),explanations:store.all<Explanation>('explanations').filter(a=>a.questionId===req.params.id).reverse(),claimed:!!store.get('rewards',req.params.id)}));
+  app.get('/api/questions/:id',async(req:any)=>({question:get<Question>('questions',req.params.id),draft:store.get<Draft>('drafts',req.params.id)||{answer:'',images:[]},attempts:store.all<Attempt>('attempts').filter(a=>a.questionId===req.params.id).reverse(),explanations:aiResults.savedExplanations(get<Question>('questions',req.params.id)),solutionTask:solutions.state(req.params.id),claimed:!!store.get('rewards',req.params.id)}));
   const saveDraft=async(req:any)=>{
     get('questions',req.params.id);const v=draftInput.parse(req.body);images(v.images);
     const old=store.get<Draft>('drafts',req.params.id),revision=v.revision??((old?.revision??0)+1);
@@ -149,20 +176,18 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
   });
   app.post('/api/attempts/:id/grade',async(req:any)=>{
     const a=get<Attempt>('attempts',req.params.id),q=get<Question>('questions',a.questionId);
-    const sourceImages=q.sources.map(s=>s.imageId).filter((x):x is string=>!!x);
-    const raw=await chat(store,'你是数学理工辅导老师。分析学生作答，参考答案也可能有误。图片模糊或证据不足时 correct=null。输出 JSON：{"correct":true或false或null,"feedback":"包含判断依据、步骤检查、纠正建议的 Markdown"}。这是辅助评阅，最终由用户确认。',JSON.stringify({题干:q.stem,小题:q.subquestions,参考答案:q.answer,参考答案来源:q.answerOrigin,作答:a.answer,图片顺序:`前 ${sourceImages.length} 张为原题，其余为学生作答`}),[...sourceImages,...a.images]);
-    const result=parseAI(raw,gradingOutput),c=effectiveAIConfig(store);
-    const review={id:id(),suggestedCorrect:result.correct,feedback:result.feedback,createdAt:now(),model:sourceImages.length||a.images.length?c.visionModel:c.model,decision:'pending' as const};
-    store.put('attempts',{...get<Attempt>('attempts',a.id),aiReview:review});return review;
+    const {force}=z.object({force:z.boolean().default(false)}).parse(req.body||{});
+    const review=await aiResults.grade(q,a.answer,a.images,[],force),current=get<Attempt>('attempts',a.id);
+    if(current.aiReview?.id===review.id)return current.aiReview;
+    store.put('attempts',{...current,aiReview:review});return review;
   });
   app.post('/api/questions/:id/explanations',async(req:any)=>{
-    const q=get<Question>('questions',req.params.id);const imgs=q.sources.map(s=>s.imageId).filter((x):x is string=>!!x);
-    const content=await chat(store,'你是大学数学与理工课程辅导老师。用中文 Markdown 分为：知识点、解题步骤、结论、易错点。公式用 $ 或 $$。明确不确定之处；如果题目信息不全请请求补充，不要编造图形条件。',JSON.stringify({题干:q.stem,小题:q.subquestions,选项:q.options,参考答案:q.answer,来源:q.answerOrigin}),imgs);
-    const c=effectiveAIConfig(store);return store.put('explanations',{id:id(),questionId:q.id,content,createdAt:now(),model:imgs.length?c.visionModel:c.model});
+    const q=get<Question>('questions',req.params.id),{force}=z.object({force:z.boolean().default(false)}).parse(req.body||{});
+    return aiResults.explain(q,force);
   });
   app.post('/api/questions/:id/reward',async(req:any)=>store.transaction(()=>{const q=get<Question>('questions',req.params.id);if(q.deleted)throw fail('题目已在回收站');if(!store.all<Attempt>('attempts').some(a=>a.questionId===q.id&&a.correct===true))throw fail('需要先确认本题作答正确');const old=store.get<Reward>('rewards',q.id);if(old)return {...old,alreadyClaimed:true,coins:readWallet(store).coins,coinsEarned:0};const wallet=creditReward(store,q.id);return {...store.put('rewards',{id:q.id,points:10,createdAt:now()}),alreadyClaimed:false,coins:wallet.coins,coinsEarned:10};}));
   app.post('/api/attachments',async(req)=>{const file=await req.file();if(!file)throw fail('请选择文件');const ext=extname(file.filename).toLowerCase();if(!['.png','.jpg','.jpeg','.webp'].includes(ext))throw fail('作答照片支持 JPG、PNG、WebP');const b=await file.toBuffer();if(b.length>15*1024*1024)throw fail('单张图片最多 15 MB');let compressed:Buffer,resized=false;try{const image=await loadImage(b);if(image.width*image.height>60000000)throw new Error();const scale=Math.min(1,2400/Math.max(image.width,image.height)),canvas=createCanvas(Math.max(1,Math.round(image.width*scale)),Math.max(1,Math.round(image.height*scale))),ctx=canvas.getContext('2d');resized=scale<1;ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(image,0,0,canvas.width,canvas.height);compressed=canvas.toBuffer('image/jpeg',85);}catch{throw fail('图片无法读取或尺寸过大，请重新选择');}const keepOriginal=!resized&&compressed.length>=b.length&&ext!=='.webp';const bytes=keepOriginal?b:compressed,mime=keepOriginal?mimeFor(file.filename):'image/jpeg',name=keepOriginal?file.filename:file.filename.replace(/\.[^.]+$/,'.jpg');const hash=(await import('node:crypto')).createHash('sha256').update(bytes).digest('hex'),existing=store.all<Attachment>('attachments').find(a=>a.ownerId===req.user?.id&&a.hash===hash);if(existing)return existing;return store.attach(bytes,name,mime);});
-  app.get('/api/attachments/:id',async(req:any,reply)=>{const a=get<Attachment>('attachments',req.params.id);reply.type(a.mime).header('Content-Disposition',`${a.mime.startsWith('image/')||a.mime==='application/pdf'?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`);return reply.send(store.bytes(a.id));});
+  app.get('/api/attachments/:id',async(req:any,reply)=>{const a=get<Attachment>('attachments',req.params.id),etag='"'+a.hash+'"';reply.header('Cache-Control','private, no-cache').header('ETag',etag);if(req.headers['if-none-match']===etag)return reply.code(304).send();reply.type(a.mime).header('Content-Disposition',`${a.mime.startsWith('image/')||a.mime==='application/pdf'?'inline':'attachment'}; filename*=UTF-8''${encodeURIComponent(a.name)}`);return reply.send(store.bytes(a.id));});
   app.post('/api/imports',async(req:any)=>{
     const folderId=typeof req.query.folderId==='string'&&req.query.folderId?req.query.folderId:null;activeFolder(folderId);if(req.user?.role==='student'&&folderId&&!get<Folder>('folders',folderId).ownerId)throw fail('请保存到个人文件夹，或选择未分类',403);if(importer.active.size>=3)throw fail('导入任务较多，请稍后重试',429);if(req.user?.role==='student'&&store.all<ImportJob>('jobs').some(j=>importer.active.has(j.id)))throw fail('请先等待当前个人导入完成',429);
     const files:Attachment[]=[];const duplicates:string[]=[];const known=new Set(store.all<Attachment>('attachments').map(a=>a.hash));
@@ -170,11 +195,12 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
     if(!files.length)throw fail('请选择至少一个文件');
     const j:ImportJob={...(req.user?.role==='student'?{ownerId:req.user.id}:{}),id:id(),name:files.map(a=>a.name).join('、'),folderId,attachmentIds:files.map(a=>a.id),status:'preparing',tasks:[],drafts:[],errors:[],duplicates,createdAt:now()};store.put('jobs',j);void importer.run(j.id);return j;
   });
+  app.get('/api/imports/:id/solutions',(req:any)=>{if(req.user?.role!=='admin')throw fail('仅管理员可查看整份资料解析进度',403);const j=get<ImportJob>('jobs',req.params.id);return solutions.progress(j.committedIds||[]);});
   app.get('/api/imports/:id',async(req:any)=>get<ImportJob>('jobs',req.params.id));
   app.post('/api/imports/:id/cancel',async(req:any)=>{get('jobs',req.params.id);importer.cancel(req.params.id);return {ok:true};});
   app.post('/api/imports/:id/retry',async(req:any)=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')throw fail('已入库任务不能重试');void importer.run(j.id);return {ok:true};});
   app.put('/api/imports/:id/drafts',async(req:any)=>{const j=get<ImportJob>('jobs',req.params.id);if(importer.active.has(j.id)||j.status==='committed')throw fail('请等识别完成或取消后再校对');const drafts=z.array(questionInput.extend({id:z.string().uuid()})).max(1000).parse(req.body);drafts.forEach(validateSources);if(new Set(drafts.map(d=>d.id)).size!==drafts.length)throw fail('草稿标识重复');return store.put('jobs',{...j,drafts});});
-  app.post('/api/imports/:id/commit',async(req:any)=>store.transaction(()=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')return {ids:j.committedIds};if(importer.active.has(j.id))throw fail('请先等待识别结束或取消');if(!j.drafts.length)throw fail('没有待入库题目');const ids:string[]=[];for(const d of j.drafts){const data=questionInput.parse(d);activeFolder(data.folderId);validateSources(data);if(req.user?.role==='student'&&data.folderId&&!get<Folder>('folders',data.folderId).ownerId)throw fail('请选择个人文件夹',403);store.put('questions',{...newQuestion(data,d.id),...(j.ownerId?{ownerId:j.ownerId}:{})});ids.push(d.id);}store.put('jobs',{...j,status:'committed',committedIds:ids});if(req.user?.role==='admin')solutions.enqueue(ids,req.user);return {ids};}));
+  app.post('/api/imports/:id/commit',async(req:any)=>store.transaction(()=>{const j=get<ImportJob>('jobs',req.params.id);if(j.status==='committed')return {ids:j.committedIds};if(importer.active.has(j.id))throw fail('请先等待识别结束或取消');if(!j.drafts.length)throw fail('没有待入库题目');const ids:string[]=[];for(const d of j.drafts){const data=questionInput.parse(d);activeFolder(data.folderId);validateSources(data);if(req.user?.role==='student'&&data.folderId&&!get<Folder>('folders',data.folderId).ownerId)throw fail('请选择个人文件夹',403);store.put('questions',{...newQuestion(data,d.id),...(j.ownerId?{ownerId:j.ownerId}:{})});ids.push(d.id);}store.put('jobs',{...j,status:'committed',committedIds:ids});if(req.user?.role==='admin')solutions.enqueue(ids,req.user,true);return {ids};}));
   app.get('/api/settings',()=>store.publicConfig());
   app.put('/api/settings',async(req)=>{
     const endpoint=z.string().refine(v=>{try{return ['http:','https:'].includes(new URL(v).protocol)&&!new URL(v).username&&!new URL(v).password;}catch{return false;}},'接口地址无效');
@@ -198,6 +224,6 @@ export function buildApp(store=new Store(),options:{auth?:boolean;publicOrigin?:
       for(const s of samples)store.put('questions',newQuestion(questionInput.parse({...s,folderId:'demo-math',answerOrigin:s.answer?'人工':'无',answerConfirmed:true})));
     });return {ok:true};
   });
-  app.addHook('onClose',async()=>{await solutions.close();for(const c of importer.active.values())c.abort();while(importer.active.size)await new Promise(r=>setTimeout(r,10));auth?.close();store.close();});
-  return {app,store,importer,auth};
+  app.addHook('onClose',async()=>{await solutions.close();for(const c of importer.active.values())c.abort();while(importer.active.size)await new Promise(r=>setTimeout(r,10));store.onChange=undefined;await snapshots?.close();auth?.close();store.close();});
+  return {app,store,importer,auth,snapshots};
 }

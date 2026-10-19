@@ -125,7 +125,7 @@ test('AI review and adoption survive restart and backup; stale review cannot be 
   let detail=await request(c,'/questions/'+q.id);
   assert.equal(detail.attempts[0].correct,null);assert.equal(detail.attempts[0].aiReview.id,first.id);
   assert.equal(detail.attempts[0].aiReview.decision,'pending');
-  const second=await request(c,`/attempts/${a.id}/grade`,'POST');
+  const second=await request(c,`/attempts/${a.id}/grade`,'POST',{force:true});
   assert.equal((await c.app.inject({url:'/api/attempts/'+a.id,method:'PATCH',payload:{correct:true,reviewId:first.id}})).statusCode,409);
   await request(c,`/attempts/${a.id}`,'PATCH',{correct:true,reviewId:second.id});
   detail=await request(c,'/questions/'+q.id);assert.equal(detail.attempts[0].aiReview.decision,'adopted');assert.doesNotMatch(detail.attempts[0].feedback,/待确认/);

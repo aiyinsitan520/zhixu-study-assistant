@@ -7,10 +7,13 @@ import { Store,decodeRecord } from './store.ts';
 import { questionInput,sourceSchema,aiReviewSchema,announcementSchema } from '../shared/schema.ts';
 import { BACKUP_CONTENT_LIMIT,BACKUP_UPLOAD_LIMIT } from '../shared/limits.ts';
 import type { Attachment } from '../shared/schema.ts';
+import {feedbackSchema,feedbackAwardSchema} from '../shared/feedback.ts';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9-]+$/);
 const ref=identifier.nullable();
 export const schemas:Record<string,z.ZodType>={
+  skinGrants:z.object({id:identifier,ownerId:identifier,skinId:z.string().max(40),createdAt:z.string()}),
+  feedback:feedbackSchema,feedbackAwards:feedbackAwardSchema,
   announcements:announcementSchema,
   folders:z.object({id:identifier,name:z.string(),parentId:ref,deleted:z.boolean(),deletedBatch:z.string().optional()}),
   questions:questionInput.extend({id:identifier,createdAt:z.string(),updatedAt:z.string(),deleted:z.boolean(),wrong:z.boolean(),mastered:z.boolean(),deletedBatch:z.string().optional()}),
@@ -19,7 +22,8 @@ export const schemas:Record<string,z.ZodType>={
   documents:z.object({id:identifier,name:z.string(),folderId:identifier,attachmentId:identifier.optional(),pages:z.array(z.object({imageId:identifier,label:z.string(),kind:z.enum(['exercise','reference','front'])}))}),
   attempts:z.object({id:identifier,questionId:identifier,answer:z.string(),images:z.array(identifier),correct:z.boolean().nullable(),judgement:z.enum(['自动','人工','AI']),feedback:z.string(),createdAt:z.string(),aiReview:aiReviewSchema.optional(),updatedAt:z.string().optional()}),
   drafts:z.object({id:identifier,answer:z.string(),images:z.array(identifier),updatedAt:z.string(),revision:z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional()}),
-  explanations:z.object({id:identifier,questionId:identifier,content:z.string(),createdAt:z.string(),model:z.string(),updatedAt:z.string().optional()}),
+  aiResults:z.object({id:identifier,questionId:identifier,mode:z.enum(['explain','grade']),fingerprint:z.string(),result:z.union([z.object({id:z.string(),questionId:identifier,content:z.string(),createdAt:z.string(),model:z.string(),fingerprint:z.string().optional()}),aiReviewSchema]),createdAt:z.string(),answer:z.string().optional(),images:z.array(identifier).optional()}),
+  explanations:z.object({id:identifier,questionId:identifier,content:z.string(),createdAt:z.string(),model:z.string(),fingerprint:z.string().optional(),updatedAt:z.string().optional()}),
   rewards:z.object({id:identifier,points:z.literal(10),createdAt:z.string(),updatedAt:z.string().optional()}),
   wallet:z.object({id:identifier,coins:z.number().int().nonnegative().max(1e9),earned:z.number().int().nonnegative().max(1e9),owned:z.array(z.string().max(40)).max(100),activeSkin:z.string().max(40),credited:z.array(identifier).max(100000).optional(),createdAt:z.string(),updatedAt:z.string().optional()}),
   profile:z.object({id:identifier,anonymous:z.boolean(),updatedAt:z.string().optional()}),
@@ -43,7 +47,7 @@ function makeBackupUnscoped(store:Store){
 export function restoreBackup(store:Store,buffer:Uint8Array){
   return store.context.exit(()=>restoreBackupUnscoped(store,buffer));
 }
-function baseKind(kind:string){return /^user-[a-zA-Z0-9-]+:(attempts|drafts|rewards|explanations|progress|wallet|profile)$/.test(kind)?kind.split(':')[1]:kind;}
+function baseKind(kind:string){return /^user-[a-zA-Z0-9-]+:(attempts|drafts|rewards|explanations|progress|wallet|profile|aiResults)$/.test(kind)?kind.split(':')[1]:kind;}
 function restoreBackupUnscoped(store:Store,buffer:Uint8Array){
   if(buffer.length>BACKUP_UPLOAD_LIMIT)throw new Error('备份压缩包超过 210 MB');
   let total=0;
@@ -58,7 +62,8 @@ function restoreBackupUnscoped(store:Store,buffer:Uint8Array){
     if(kind==='attachments'){const b=files['attachments/'+v.id];if(!b||b.length!==v.size||createHash('sha256').update(b).digest('hex')!==v.hash)throw new Error('备份附件丢失或校验失败');}
     if(kind==='folders'&&v.parentId)has('folders',v.parentId);
     if(kind==='questions'){if(v.folderId)has('folders',v.folderId);v.sources.forEach(checkSource);}
-    if(['attempts','explanations'].includes(kind))has('questions',v.questionId);
+    if(kind==='feedbackAwards')has('feedback',v.feedbackId);
+    if(['attempts','explanations','aiResults'].includes(kind))has('questions',v.questionId);
     if(['drafts','rewards','progress'].includes(kind))has('questions',v.id);
     if(kind==='documents'){has('folders',v.folderId);if(v.attachmentId)has('attachments',v.attachmentId);v.pages.forEach((p:any)=>has('attachments',p.imageId));}
     if(v.images)v.images.forEach((x:string)=>has('attachments',x));

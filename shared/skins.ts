@@ -1,5 +1,6 @@
-export type Skin={id:string;name:string;tagline:string;cost:number;swatch:[string,string,string]};
+export type Skin={id:string;name:string;tagline:string;cost:number;promotion?:'beta';swatch:[string,string,string]};
 export const skins:Skin[]=[
+ {id:'glass',name:'流光玻璃',tagline:'透亮的磨砂、轻盈的浮层，让每一点进步都映着光。',cost:0,promotion:'beta',swatch:['#4664b1','#dce8fa','#f0f5fe']},
  {id:'forest',name:'森林原野',tagline:'默认配色：墨绿、纸白，和一点安静的光。',cost:0,swatch:['#365d48','#eef1eb','#f7f8f5']},
  {id:'ocean',name:'深海蓝',tagline:'像深夜的图书馆，冷静、专注、不打扰。',cost:120,swatch:['#2f5d78','#e9f0f5','#f6f9fb']},
  {id:'sakura',name:'樱花雾',tagline:'柔和的暖粉，适合慢慢读书的下午。',cost:180,swatch:['#a45a72','#f7ebef','#fdf7f9']},

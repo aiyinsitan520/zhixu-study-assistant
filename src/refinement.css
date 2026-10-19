@@ -18,3 +18,6 @@
 /* Keep account controls reachable on short desktop windows: only the middle
    region scrolls, so the bottom controls stay pinned inside the viewport. */
 .sidebar{overflow:hidden}.sidebar>*{flex-shrink:0}.sidebar-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;display:flex;flex-direction:column}.sidebar-bottom{flex-shrink:0}.folder-tree{min-height:70px;flex-shrink:1}.settings-panel+.settings-grid{margin-top:24px}
+
+/* The primary action covers the collection; reading remains a separate action. */
+.collection-card{position:relative;transition:border-color .16s ease,box-shadow .16s ease}.collection-open{position:absolute;inset:0;z-index:1;width:100%;height:100%;padding:0;border:0;border-radius:inherit;background:transparent;cursor:pointer}.collection-open:focus-visible{outline:2px solid var(--accent);outline-offset:-3px}.collection-card:has(.collection-open:hover),.collection-card:has(.collection-open:focus-visible){border-color:var(--accent);box-shadow:0 5px 18px #0000000c}.collection-read{position:relative;z-index:2}.collection-read:hover{text-decoration:underline}.collection-body span.text-link{display:inline-flex;align-items:center;gap:5px}@media(prefers-reduced-motion:reduce){.collection-card{transition:none}}

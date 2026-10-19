@@ -9,6 +9,7 @@ export const questionInput = z.object({
   options:z.array(z.string().max(10000)).max(20).default([]), answer:z.string().max(30000).default(''),
   explanation:z.string().max(100000).default(''), answerOrigin:z.enum(['原文','人工','AI','无']).default('无'),
   explanationOrigin:z.enum(['原文','人工','AI']).optional(),
+  solutionVersion:z.string().max(40).optional(),solutionModel:z.string().max(120).optional(),solutionCompletedAt:z.string().optional(),
   answerConfirmed:z.boolean().default(false), subquestions:z.array(z.string().max(20000)).max(50).default([]),
   sources:z.array(sourceSchema).max(300).default([]), folderId:z.string().nullable().default(null),
   materialKind:z.enum(['question','page']).default('question'),
@@ -20,10 +21,10 @@ export type Question = QuestionInput & {ownerId?:string;id:string; createdAt:str
 export type Folder = {ownerId?:string;id:string; name:string; parentId:string|null; deleted:boolean; deletedBatch?:string};
 export type Document = {id:string;name:string;folderId:string;attachmentId?:string;pages:{imageId:string;label:string;kind:'exercise'|'reference'|'front'}[]};
 export type Attachment = {id:string; name:string; mime:string; hash:string; size:number; ownerId?:string};
-export const aiReviewSchema=z.object({id:z.string().uuid(),suggestedCorrect:z.boolean().nullable(),feedback:z.string().max(50000),createdAt:z.string(),model:z.string(),decision:z.enum(['pending','adopted','overridden']),confirmedAt:z.string().optional()});
+export const aiReviewSchema=z.object({id:z.string().uuid(),suggestedCorrect:z.boolean().nullable(),feedback:z.string().max(50000),fingerprint:z.string().optional(),createdAt:z.string(),model:z.string(),decision:z.enum(['pending','adopted','overridden']),confirmedAt:z.string().optional()});
 export type Attempt = {id:string; questionId:string; answer:string; images:string[]; correct:boolean|null; judgement:'自动'|'人工'|'AI'; feedback:string; createdAt:string; aiReview?:z.infer<typeof aiReviewSchema>};
 export type Draft = {id:string; answer:string; images:string[]; updatedAt:string; revision?:number};
-export type Explanation = {id:string; questionId:string; content:string; createdAt:string; model:string};
+export type Explanation = {fingerprint?:string;id:string; questionId:string; content:string; createdAt:string; model:string};
 export type Reward = {id:string; points:number; createdAt:string};
 export type JobTask = {id:string; source:z.infer<typeof sourceSchema>; text?:string; imageId?:string; status:'pending'|'done'|'error'; error?:string};
 export type ImportDraft = QuestionInput & {id:string};
